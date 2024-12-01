@@ -1,102 +1,87 @@
 import os
 import streamlit as st
 import tensorflow as tf
+from tensorflow.keras.preprocessing import image
 import numpy as np
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Conv2D, MaxPooling2D, Dense, Flatten, Dropout
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.utils import to_categorical
-from sklearn.model_selection import train_test_split
 from PIL import Image
-import matplotlib.pyplot as plt
+import subprocess
 
-# Daftar kelas
+# Clone repository dari GitHub jika belum ada
+if not os.path.exists('riceimageclassify'):
+    subprocess.run(["git", "clone", "https://github.com/ArbilShofiyurrahman/riceimageclassify.git"])
+
+# Path dataset
+dataset_path = './riceimageclassify'
+
+# Daftar kelas yang akan digunakan untuk klasifikasi
 CLASS_LABELS = ["Arborio", "Basmati", "Ipsala", "Jasmine", "Karacadag"]
 
-# Dataset Path
-DATASET_PATH = "./dataset"  # Sesuaikan lokasi dataset Anda
-
-# Load and preprocess dataset
-@st.cache_data
-def load_data():
-    images = []
-    labels = []
-
-    for class_index, class_name in enumerate(CLASS_LABELS):
-        class_path = os.path.join(DATASET_PATH, class_name)
-        if os.path.isdir(class_path):
-            for image_file in os.listdir(class_path):
-                image_path = os.path.join(class_path, image_file)
-                try:
-                    # Load and preprocess images
-                    img = tf.keras.preprocessing.image.load_img(image_path, target_size=(224, 224))
-                    img_array = tf.keras.preprocessing.image.img_to_array(img) / 255.0
-                    images.append(img_array)
-                    labels.append(class_index)
-                except Exception as e:
-                    print(f"Error loading image {image_path}: {e}")
-
-    images = np.array(images)
-    labels = np.array(labels)
-    return images, labels
-
-# Load dataset
-images, labels = load_data()
-
-# Split dataset
-labels_categorical = to_categorical(labels)
-X_train, X_test, y_train, y_test = train_test_split(images, labels_categorical, test_size=0.2, random_state=42)
-
-# Build CNN model
+# Menyusun model CNN pre-trained dan fine-tuning
 @st.cache_resource
-def build_model():
-    model = Sequential([
-        Conv2D(32, kernel_size=(3, 3), activation='relu', input_shape=(224, 224, 3)),
-        MaxPooling2D(pool_size=(2, 2)),
-        Flatten(),
-        Dense(128, activation='relu'),
-        Dropout(0.3),
-        Dense(len(CLASS_LABELS), activation='softmax')
+def load_model():
+    base_model = tf.keras.applications.MobileNetV2(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
+    base_model.trainable = False  # Menonaktifkan pelatihan model dasar
+    model = tf.keras.Sequential([
+        base_model,
+        tf.keras.layers.GlobalAveragePooling2D(),
+        tf.keras.layers.Dense(5, activation='softmax')  # 5 kelas
     ])
-    model.compile(optimizer=Adam(learning_rate=0.001), loss='categorical_crossentropy', metrics=['accuracy'])
+    model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     return model
 
-# Train model
-@st.cache_resource
-def train_model():
-    model = build_model()
-    model.fit(X_train, y_train, batch_size=32, epochs=10, validation_data=(X_test, y_test))
-    return model
+# Load model
+model = load_model()
 
-model = train_model()
+# Fungsi untuk mengklasifikasikan gambar
+def classify_image(image_path):
+    img = image.load_img(image_path, target_size=(224, 224))  # Menyesuaikan ukuran gambar
+    img_array = image.img_to_array(img)  # Mengubah gambar menjadi array
+    img_array = np.expand_dims(img_array, axis=0)  # Menambahkan dimensi batch
+    img_array = img_array / 255.0  # Normalisasi gambar
+    
+    predictions = model.predict(img_array)
+    class_idx = np.argmax(predictions)  # Menemukan kelas dengan skor tertinggi
+    return CLASS_LABELS[class_idx]  # Mengembalikan nama kelas yang diprediksi
 
-# Streamlit App
+# Aplikasi Streamlit
 def main():
-    st.title("Klasifikasi Citra Padi dengan CNN")
-    st.write("Aplikasi ini mengklasifikasikan gambar padi ke dalam 5 kelas: Arborio, Basmati, Ipsala, Jasmine, Karacadag.")
+    st.title("Klasifikasi Citra Padi")
+    st.write("Aplikasi ini dapat mengklasifikasikan gambar padi ke dalam 5 kelas: Arborio, Basmati, Ipsala, Jasmine, Karacadag.")
+    
+    # Menampilkan contoh gambar tiap kelas dari folder masing-masing
+    st.write("Contoh gambar untuk tiap kelas:")
+    
+    # Menampilkan gambar per kelas dari folder yang sesuai
+    image_paths = {}
+    for class_name in CLASS_LABELS:
+        folder_path = os.path.join(dataset_path, class_name)
+        # Ambil gambar pertama dari folder untuk setiap kelas
+        class_images = os.listdir(folder_path)
+        first_image_path = os.path.join(folder_path, class_images[0])  # Mengambil gambar pertama
+        image_paths[class_name] = first_image_path
 
-    # Pilih gambar untuk diklasifikasikan
-    uploaded_file = st.file_uploader("Unggah gambar padi (jpg, png, jpeg)", type=["jpg", "png", "jpeg"])
+    cols = st.columns(5)  # Membuat 5 kolom untuk menampilkan gambar dalam 1 baris
+    for i, class_name in enumerate(CLASS_LABELS):
+        with cols[i]:
+            st.image(image_paths[class_name], caption=class_name, use_column_width=True)
+
+    # Membuat pilihan untuk mengunggah gambar
+    uploaded_file = st.file_uploader("Pilih gambar padi untuk diklasifikasikan", type=["jpg", "png", "jpeg"])
     
     if uploaded_file is not None:
-        # Tampilkan gambar
+        # Menampilkan gambar yang diunggah
         image = Image.open(uploaded_file)
         st.image(image, caption="Gambar yang diunggah", use_column_width=True)
 
-        # Simpan sementara untuk prediksi
+        # Menyimpan file sementara untuk prediksi
         with open("uploaded_image.jpg", "wb") as f:
             f.write(uploaded_file.getbuffer())
 
-        # Prediksi
+        # Klasifikasi gambar
         if st.button("Klasifikasikan Gambar"):
-            img = tf.keras.preprocessing.image.load_img("uploaded_image.jpg", target_size=(224, 224))
-            img_array = tf.keras.preprocessing.image.img_to_array(img) / 255.0
-            img_array = np.expand_dims(img_array, axis=0)
-            
-            predictions = model.predict(img_array)
-            class_idx = np.argmax(predictions)
-            st.write(f"Prediksi kelas gambar: **{CLASS_LABELS[class_idx]}**")
-            
+            predicted_class = classify_image("uploaded_image.jpg")
+            st.write(f"Prediksi kelas gambar: {predicted_class}")
+
             # Hapus file sementara
             os.remove("uploaded_image.jpg")
 
